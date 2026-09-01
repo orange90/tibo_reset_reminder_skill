@@ -15,6 +15,82 @@ function fixture(payload) {
   );
 }
 
+function relayTweet({
+  id,
+  username,
+  text,
+  createdAt,
+  quote = false,
+  reply = false,
+  retweet = false,
+  noteText = null,
+  offset = 0,
+}) {
+  const tweetKey = Buffer.from("Tweet:" + id).toString("base64");
+  const userKey = Buffer.from("User:" + username + ":1").toString("base64");
+  const userReferenceKey = userKey.replace(/=+$/, "");
+  const userResultsKey = Buffer.from("UserResults:" + username).toString(
+    "base64",
+  );
+  const noteResultsKey = Buffer.from("NoteTweetResults:" + id).toString(
+    "base64",
+  );
+  const noteKey = Buffer.from("NoteTweet:" + id).toString("base64");
+  const index = 100 + offset * 30;
+  const reference = (value, at) =>
+    `$R[${at}]={__ref:${JSON.stringify(value)}}`;
+
+  const records = [
+    `"entry:${id}":$R[${index}]={entry_id:"tweet-${id}"}`,
+    `"${tweetKey}":$R[${index + 1}]={` +
+      `__typename:"Tweet",rest_id:"${id}",` +
+      `core:${reference(`client:${tweetKey}:core`, index + 2)},` +
+      `details:${reference(`client:${tweetKey}:details`, index + 3)},` +
+      `note_tweet:${
+        noteText
+          ? reference(`client:${tweetKey}:note_tweet`, index + 4)
+          : "null"
+      },` +
+      `reply_to_results:${
+        reply ? reference("TweetResults:parent", index + 5) : "null"
+      },` +
+      `quoted_tweet_results:${
+        quote ? reference("TweetResults:quoted", index + 6) : "null"
+      },` +
+      `legacy:${reference(`client:${tweetKey}:legacy`, index + 7)}}`,
+    `"client:${tweetKey}:core":$R[${index + 8}]={` +
+      `user_results:${reference(userResultsKey, index + 9)}}`,
+    `"${userResultsKey}":$R[${index + 10}]={` +
+      `result:${reference(userReferenceKey, index + 11)}}`,
+    `${userReferenceKey}:$R[${index + 12}]={` +
+      `core:${reference(`client:${userReferenceKey}:core`, index + 13)}}`,
+    `"client:${userReferenceKey}:core":$R[${index + 14}]={` +
+      `screen_name:${JSON.stringify(username)}}`,
+    `"client:${tweetKey}:details":$R[${index + 15}]={` +
+      `__typename:"TBirdData",full_text:${JSON.stringify(text)},` +
+      `created_at_ms:${Date.parse(createdAt)}}`,
+    `"client:${tweetKey}:legacy":$R[${index + 16}]={` +
+      `retweeted_status_results:${
+        retweet ? reference("TweetResults:repost", index + 17) : "null"
+      }}`,
+  ];
+  if (noteText) {
+    records.push(
+      `"client:${tweetKey}:note_tweet":$R[${index + 18}]={` +
+        `note_tweet_results:${reference(noteResultsKey, index + 19)}}`,
+      `"${noteResultsKey}":$R[${index + 20}]={` +
+        `result:${reference(noteKey, index + 21)}}`,
+      `"${noteKey}":$R[${index + 22}]={` +
+        `__typename:"NoteTweet",text:${JSON.stringify(noteText)}}`,
+    );
+  }
+  return records.join(",");
+}
+
+function relayFixture(posts) {
+  return `<script>(${posts.map(relayTweet).join(",")})</script>`;
+}
+
 test("parses verified target posts and excludes reposts and quoted authors", () => {
   const payload = {
     pageProps: {
@@ -84,6 +160,44 @@ test("parses semantic metadata from the public X profile", () => {
       created_at: "2026-07-29T10:00:00.000Z",
       url: "https://x.com/thsottiaux/status/1900000000000000004",
       kind: "post",
+    },
+  ]);
+});
+
+test("parses the current public X Relay stream without evaluating scripts", () => {
+  const html = relayFixture([
+    {
+      id: "1900000000000000101",
+      username: "thsottiaux",
+      text: "Short preview",
+      noteText: "Codex weekly allowance may reset tomorrow.",
+      createdAt: "2026-07-29T12:00:00.000Z",
+      quote: true,
+      offset: 0,
+    },
+    {
+      id: "1900000000000000102",
+      username: "someone_else",
+      text: "Quoted author text must not leak into the profile feed.",
+      createdAt: "2026-07-29T11:00:00.000Z",
+      offset: 1,
+    },
+    {
+      id: "1900000000000000103",
+      username: "thsottiaux",
+      text: "A plain repost",
+      createdAt: "2026-07-29T10:00:00.000Z",
+      retweet: true,
+      offset: 2,
+    },
+  ]);
+  assert.deepEqual(parsePublicProfileHtml(html), [
+    {
+      id: "1900000000000000101",
+      text: "Codex weekly allowance may reset tomorrow.",
+      created_at: "2026-07-29T12:00:00.000Z",
+      url: "https://x.com/thsottiaux/status/1900000000000000101",
+      kind: "quote",
     },
   ]);
 });
